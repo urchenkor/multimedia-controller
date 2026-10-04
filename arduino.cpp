@@ -73,10 +73,9 @@ void loop() {
     if (reading != lastButtonState) {
       lastButtonState = reading;
 
-      if (lastButtonState == LOW) {
-        micOn = !micOn;
-        Serial.println(micOn ? "MIC_ON" : "MIC_OFF");
-      }
+     if (lastButtonState == LOW) {
+             Serial.println("MIC_TOGGLE");   // было micOn ? "MIC_ON" : "MIC_OFF"
+           }
     }
   }
 }
