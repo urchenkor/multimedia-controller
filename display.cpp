@@ -65,6 +65,7 @@ void setup() {
     Serial.println("SSD1306 не найден!");
     for (;;);
   }
+  display.setRotation(2);
   display.clearDisplay();
   display.display();
 
@@ -134,9 +135,9 @@ void drawScreen() {
 
   // --- Строка 2: полоска громкости ---
   int barX = 0;
-  int barY = 14;
+  int barY = 12;
   int barW = SCREEN_WIDTH - 2;
-  int barH = 12;
+  int barH = 10;
 
   display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
 
@@ -147,19 +148,19 @@ void drawScreen() {
 
   // --- Строка 3: микрофон ---
   display.setTextSize(1);
-  display.setCursor(0, 34);
+  display.setCursor(0, 24);
   display.print("MIC:");
 
   // Индикатор (закрашенный или пустой кружок)
   int dotX = 32;
-  int dotY = 38;
+  int dotY = 28;
   if (micOn) {
-    display.fillCircle(dotX, dotY, 4, SSD1306_WHITE);
+    display.fillCircle(dotX, dotY, 3, SSD1306_WHITE);
   } else {
-    display.drawCircle(dotX, dotY, 4, SSD1306_WHITE);
+    display.drawCircle(dotX, dotY, 3, SSD1306_WHITE);
   }
 
-  display.setCursor(42, 34);
+  display.setCursor(42, 24);
   display.print(micOn ? "ON" : "OFF");
 
   display.display();
