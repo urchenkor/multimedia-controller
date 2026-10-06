@@ -55,11 +55,18 @@ bool micOn = true;
 int currentVolume = 50;         // 0..100
 bool speakerMuted = false;      // +++ MUTE +++
 
+// --- Heartbeat ---
+unsigned long lastPingTime = 0;
+const unsigned long PING_TIMEOUT = 3000;   // 3 секунды без PING = сон
+bool sleepMode = false;
+
 // --- Буфер для входящих команд ---
 String inputBuffer = "";
 
 void setup() {
   Serial.begin(9600);
+
+  lastPingTime = millis();
 
   // Дисплей
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
@@ -202,6 +209,15 @@ void handleIncoming(String cmd) {
       drawScreen();
     }
   }
+
+// Обработка PING — обновляет таймер связи
+  else if (cmd == "PING") {
+    lastPingTime = millis();
+    if (sleepMode) {
+      sleepMode = false;
+      drawScreen();   // возвращаемся к обычному экрану
+    }
+  }
 }
 
 void readSerial() {
@@ -218,6 +234,36 @@ void readSerial() {
       if (inputBuffer.length() > 64) inputBuffer = "";
     }
   }
+}
+
+void drawSleepScreen() {
+  display.clearDisplay();
+
+  // --- Глаза (закрытые, как во сне) ---
+  // Левый глаз
+  display.drawLine(30, 20, 45, 20, SSD1306_WHITE);
+  // Правый глаз
+  display.drawLine(83, 20, 98, 20, SSD1306_WHITE);
+
+  // --- Улыбка ---
+  display.drawLine(45, 32, 83, 32, SSD1306_WHITE);
+  display.drawLine(45, 32, 40, 28, SSD1306_WHITE);
+  display.drawLine(83, 32, 88, 28, SSD1306_WHITE);
+
+  // --- Ротик (открытый, как будто спит) ---
+  display.drawCircle(64, 42, 4, SSD1306_WHITE);
+
+  // --- Zzz (спит) ---
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(100, 5);
+  display.print("z");
+  display.setCursor(108, 12);
+  display.print("Z");
+  display.setCursor(116, 19);
+  display.print("Z");
+
+  display.display();
 }
 
 // ============================================================
@@ -281,5 +327,11 @@ void loop() {
         }
       }
     }
+  }
+
+// --- Проверка связи с ПК ---
+  if (!sleepMode && (millis() - lastPingTime > PING_TIMEOUT)) {
+    sleepMode = true;
+    drawSleepScreen();
   }
 }

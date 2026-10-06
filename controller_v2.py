@@ -28,6 +28,17 @@ ser = None
 current_step = 30
 last_click_time = 0.0
 
+def heartbeat():
+    """Раз в секунду шлёт PING на Arduino, чтобы она знала, что ПК жив."""
+    global ser
+    while True:
+        if ser is not None and ser.is_open:
+            try:
+                ser.write(b"PING\n")
+            except serial.SerialException:
+                pass
+        time.sleep(1)
+
 # --- Отправка на дисплей ---
 def send_to_display(volume_percent):
     global ser
@@ -196,6 +207,8 @@ def main():
     mic = get_mic_interface()
     watcher = threading.Thread(target=volume_watcher, args=(speaker,), daemon=True)
     watcher.start()
+    hb = threading.Thread(target=heartbeat, daemon=True)
+    hb.start()
 
     print("Готово. Управляй!")
 
