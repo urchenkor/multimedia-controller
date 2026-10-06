@@ -4,14 +4,11 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from comtypes import CLSCTX_ALL
 from ctypes import cast, POINTER
 import keyboard
-import math
 import time
 import threading
 
 # --- Настройки ---
 BAUD_RATE = 9600
-VOLUME_STEPS = 100
-VOLUME_K = 3.0
 
 # --- Адаптивный шаг ---
 ACCEL_TIMEOUT = 0.3
@@ -25,9 +22,12 @@ SPEED_TABLE = [
 
 # --- Глобальные переменные ---
 ser = None
-current_step = 30
+current_volume = 50          # 0..100 (совпадает с Windows)
 last_click_time = 0.0
+last_encoder_change = 0.0
 
+
+# --- Heartbeat ---
 def heartbeat():
     """Раз в секунду шлёт PING на Arduino, чтобы она знала, что ПК жив."""
     global ser
@@ -65,17 +65,22 @@ def send_mute_state(muted):
 # --- Опрос громкости и mute ---
 def volume_watcher(volume):
     """Раз в 0.5 сек проверяет системную громкость и обновляет дисплей."""
-    global current_step
+    global current_volume, last_encoder_change
     last_sent_vol = -1
     last_sent_mute = None
 
     while True:
         try:
+            if time.time() - last_encoder_change < 1.0:
+                time.sleep(0.1)
+                continue
+
             real_linear = volume.GetMasterVolumeLevelScalar()
-            display_percent = int(real_linear * 100)
+            display_percent = int(round(real_linear * 100))
 
             if display_percent != last_sent_vol:
                 last_sent_vol = display_percent
+                current_volume = display_percent
                 send_to_display(display_percent)
 
             # +++ MUTE: следим за состоянием mute +++
@@ -110,26 +115,15 @@ def get_mic_interface():
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
-# --- Преобразования громкости ---
-def step_to_linear(step):
-    step = max(0, min(VOLUME_STEPS, step))
-    ratio = step / VOLUME_STEPS
-    return (math.exp(VOLUME_K * ratio) - 1) / (math.exp(VOLUME_K) - 1)
-
-def linear_to_step(linear):
-    linear = max(0.0, min(1.0, linear))
-    if linear <= 0:
-        return 0
-    ratio = math.log(linear * (math.exp(VOLUME_K) - 1) + 1) / VOLUME_K
-    return int(round(ratio * VOLUME_STEPS))
-
+# --- Синхронизация при старте ---
 def sync_volume_from_system(volume):
-    global current_step
+    global current_volume
     real_linear = volume.GetMasterVolumeLevelScalar()
-    current_step = linear_to_step(real_linear)
-    print(f"Текущая громкость Windows: {int(real_linear*100)}% "
-          f"(ступень {current_step}/{VOLUME_STEPS})")
+    current_volume = int(round(real_linear * 100))
+    print(f"Текущая громкость Windows: {current_volume}%")
 
+
+# --- Адаптивный шаг ---
 def get_step_multiplier(interval):
     for threshold, multiplier in SPEED_TABLE:
         if interval <= threshold:
@@ -137,30 +131,34 @@ def get_step_multiplier(interval):
     return 1
 
 def change_volume_adaptive(volume, direction):
-    global current_step, last_click_time
+    """direction: +1 (вверх) или -1 (вниз). Шаг зависит от скорости вращения."""
+    global current_volume, last_click_time, last_encoder_change
 
     now = time.time()
     interval = now - last_click_time
 
     if interval > ACCEL_TIMEOUT:
+        # После паузы — синхронизация с реальной громкостью Windows
         real_linear = volume.GetMasterVolumeLevelScalar()
-        current_step = linear_to_step(real_linear)
+        current_volume = int(round(real_linear * 100))
         multiplier = 1
     else:
         multiplier = get_step_multiplier(interval)
 
     last_click_time = now
+    last_encoder_change = now
 
-    current_step = max(0, min(VOLUME_STEPS, current_step + direction * multiplier))
-    linear = step_to_linear(current_step)
-    volume.SetMasterVolumeLevelScalar(linear, None)
+    # Меняем громкость в процентах, напрямую
+    current_volume = max(0, min(100, current_volume + direction * multiplier))
 
-    # Процент для дисплея (0..100) — переводим из ступеней
-    display_percent = int(current_step * 100 / VOLUME_STEPS)
-    send_to_display(display_percent)
+    # Отправляем в Windows
+    volume.SetMasterVolumeLevelScalar(current_volume / 100.0, None)
 
-    print(f"Громкость: {current_step}/{VOLUME_STEPS} "
-          f"(шаг {multiplier}, {int(linear*100)}%)")
+    # Отправляем на дисплей
+    send_to_display(current_volume)
+
+    print(f"Громкость: {current_volume}% (шаг {multiplier})")
+
 
 # --- Mute динамиков ---
 def toggle_speaker_mute(volume):
@@ -168,7 +166,8 @@ def toggle_speaker_mute(volume):
     volume.SetMute(not muted, None)
     new_state = not muted
     print("🔊 Звук ВЫКЛ" if new_state else "🔊 Звук ВКЛ")
-    send_mute_state(new_state)   # +++ MUTE +++
+    send_mute_state(new_state)
+
 
 # --- Mute микрофона ---
 def toggle_mic_mute(mic):
@@ -178,7 +177,7 @@ def toggle_mic_mute(mic):
 
 # --- Основной цикл ---
 def main():
-    global ser, current_step
+    global ser, current_volume
 
     port = find_arduino()
     if not port:
@@ -197,11 +196,7 @@ def main():
     speaker = get_speaker_interface()
     sync_volume_from_system(speaker)
 
-    # Отправляем начальную громкость на дисплей
-    display_percent = int(current_step * 100 / VOLUME_STEPS)
-    send_to_display(display_percent)
-
-    # +++ MUTE: начальное состояние +++
+    send_to_display(current_volume)
     send_mute_state(speaker.GetMute())
 
     mic = get_mic_interface()
@@ -240,6 +235,7 @@ def main():
     finally:
         if ser and ser.is_open:
             ser.close()
+
 
 if __name__ == "__main__":
     main()
