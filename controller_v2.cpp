@@ -52,7 +52,8 @@ unsigned long switchDebounce[4] = {0, 0, 0, 0};
 
 // --- Состояние ---
 bool micOn = true;
-int currentVolume = 50;   // 0..100
+int currentVolume = 50;         // 0..100
+bool speakerMuted = false;      // +++ MUTE +++
 
 // --- Буфер для входящих команд ---
 String inputBuffer = "";
@@ -122,9 +123,15 @@ void drawScreen() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.print("VOLUME");
 
-  // Процент справа (выравниваем по правому краю)
+  // +++ MUTE +++
+  if (speakerMuted) {
+    display.print("MUTE");
+  } else {
+    display.print("VOLUME");
+  }
+
+  // Процент справа
   char volStr[5];
   sprintf(volStr, "%3d%%", currentVolume);
   int16_t x1, y1;
@@ -141,9 +148,12 @@ void drawScreen() {
 
   display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
 
-  int fillW = (barW - 4) * currentVolume / 100;
-  if (fillW > 0) {
-    display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+  // +++ MUTE: если заглушено — полоска пустая +++
+  if (!speakerMuted) {
+    int fillW = (barW - 4) * currentVolume / 100;
+    if (fillW > 0) {
+      display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+    }
   }
 
   // --- Строка 3: микрофон ---
@@ -163,6 +173,12 @@ void drawScreen() {
   display.setCursor(42, 24);
   display.print(micOn ? "ON" : "OFF");
 
+  // +++ MUTE: индикатор в правом нижнем углу +++
+  if (speakerMuted) {
+    display.setCursor(90, 24);
+    display.print("[MUTE]");
+  }
+
   display.display();
 }
 
@@ -175,6 +191,14 @@ void handleIncoming(String cmd) {
     int val = cmd.substring(9).toInt();
     if (val >= 0 && val <= 100 && val != currentVolume) {
       currentVolume = val;
+      drawScreen();
+    }
+  }
+  // +++ MUTE: формат DISP:MUTE:ON / DISP:MUTE:OFF +++
+  else if (cmd.startsWith("DISP:MUTE:")) {
+    bool newMuted = cmd.substring(10) == "ON";
+    if (newMuted != speakerMuted) {
+      speakerMuted = newMuted;
       drawScreen();
     }
   }
@@ -191,7 +215,7 @@ void readSerial() {
       inputBuffer = "";
     } else if (c != '\r') {
       inputBuffer += c;
-      if (inputBuffer.length() > 64) inputBuffer = "";  // защита от переполнения
+      if (inputBuffer.length() > 64) inputBuffer = "";
     }
   }
 }
