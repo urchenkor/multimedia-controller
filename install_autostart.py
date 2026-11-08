@@ -47,7 +47,9 @@ def build_task_xml(pythonw, script, user):
     add(action, "Command", str(pythonw))
     add(action, "Arguments", f'"{script}"')
     add(action, "WorkingDirectory", str(script.parent))
-    return ET.tostring(task, encoding="utf-8", xml_declaration=True)
+    # schtasks imports reliably with a UTF-16 BOM and a matching XML declaration.
+    # A UTF-8 declaration can fail with "unable to switch encoding" on Windows.
+    return ET.tostring(task, encoding="utf-16", xml_declaration=True)
 
 
 def main():

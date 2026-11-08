@@ -1,4 +1,5 @@
 """Validate the Windows task definition and installation without scheduling locally."""
+import codecs
 from pathlib import Path
 import subprocess
 import unittest
@@ -18,6 +19,16 @@ class AutostartTests(unittest.TestCase):
 
     def value(self, path):
         return self.root.find(path, self.ns).text
+
+    def test_task_xml_has_utf16_bom_and_matching_declaration(self):
+        script = Path('/Users/Тест & User/Контроллер/controller_v2.py')
+        user = 'PC\\Тест'
+        data = installer.build_task_xml(self.pythonw, script, user)
+        self.assertTrue(data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)))
+        self.assertIn("encoding='utf-16'", data.decode('utf-16').split('?>', 1)[0])
+        root = ET.fromstring(data)
+        self.assertEqual(root.find('t:Principals/t:Principal/t:UserId', self.ns).text, user)
+        self.assertEqual(root.find('t:Actions/t:Exec/t:Arguments', self.ns).text, f'"{script}"')
 
     def test_logon_runs_for_installing_user_after_delay(self):
         self.assertEqual(self.value('t:Triggers/t:LogonTrigger/t:UserId'), self.user)
@@ -58,7 +69,9 @@ class AutostartTests(unittest.TestCase):
             self.assertEqual(args[-1], '/F')
             xml_path = Path(args[args.index('/XML') + 1])
             self.assertTrue(xml_path.is_file())
-            ET.fromstring(xml_path.read_bytes())
+            data = xml_path.read_bytes()
+            self.assertTrue(data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)))
+            ET.fromstring(data)
             captured.append(xml_path)
             return Mock(returncode=0)
 

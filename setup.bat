@@ -48,7 +48,8 @@ echo [3/3] Setting up automatic startup and wake recovery...
 "!PYTHON_EXE!" "%~dp0install_autostart.py"
 if !errorlevel! neq 0 (
     echo [ERROR] Failed to install the scheduled task.
-    echo Run setup.bat as Administrator under your normal Windows account.
+    echo Check the task installation error above for details.
+    echo Administrator rights are required; XML errors indicate an installer problem.
     pause
     exit /b 1
 )
