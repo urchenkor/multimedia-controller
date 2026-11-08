@@ -9,6 +9,7 @@ import threading
 
 # --- Настройки ---
 BAUD_RATE = 9600
+MIC_SYNC_INTERVAL = 0.5
 
 # --- Адаптивный шаг ---
 ACCEL_TIMEOUT = 0.3
@@ -22,6 +23,7 @@ SPEED_TABLE = [
 
 # --- Глобальные переменные ---
 ser = None
+serial_write_lock = threading.Lock()
 current_volume = 50          # 0..100 (совпадает с Windows)
 last_click_time = 0.0
 last_encoder_change = 0.0
@@ -34,7 +36,8 @@ def heartbeat():
     while True:
         if ser is not None and ser.is_open:
             try:
-                ser.write(b"PING\n")
+                with serial_write_lock:
+                    ser.write(b"PING\n")
             except serial.SerialException:
                 pass
         time.sleep(1)
@@ -45,7 +48,8 @@ def send_to_display(volume_percent):
     if ser is not None and ser.is_open:
         try:
             msg = f"DISP:VOL:{volume_percent}\n"
-            ser.write(msg.encode())
+            with serial_write_lock:
+                ser.write(msg.encode())
             print(f"→ {msg.strip()}")
         except serial.SerialException as e:
             print(f"Ошибка отправки: {e}")
@@ -57,10 +61,30 @@ def send_mute_state(muted):
         try:
             state = "ON" if muted else "OFF"
             msg = f"DISP:MUTE:{state}\n"
-            ser.write(msg.encode())
+            with serial_write_lock:
+                ser.write(msg.encode())
             print(f"→ {msg.strip()}")
         except serial.SerialException as e:
             print(f"Ошибка отправки: {e}")
+
+# --- Синхронизация микрофона ---
+def send_mic_state(muted):
+    """DISP:MIC describes whether the microphone is ON, not whether it is muted."""
+    if ser is not None and ser.is_open:
+        state = "OFF" if muted else "ON"
+        with serial_write_lock:
+            ser.write(f"DISP:MIC:{state}\n".encode())
+
+
+def sync_mic_from_system():
+    """Reacquire the default endpoint after sleep/device changes and retry on failure."""
+    try:
+        mic = get_mic_interface()
+        # Send even unchanged state: the board may have reset while Windows slept.
+        send_mic_state(mic.GetMute())
+    except Exception as e:
+        print(f"Microphone sync error: {e}")
+
 
 # --- Опрос громкости и mute ---
 def volume_watcher(volume):
@@ -170,10 +194,14 @@ def toggle_speaker_mute(volume):
 
 
 # --- Mute микрофона ---
-def toggle_mic_mute(mic):
-    muted = mic.GetMute()
-    mic.SetMute(not muted, None)
-    print("🎤 Микрофон ВЫКЛ" if not muted else "🎤 Микрофон ВКЛ")
+def toggle_mic_mute():
+    try:
+        mic = get_mic_interface()
+        mic.SetMute(not mic.GetMute(), None)
+        # Report the actual result, rather than assuming SetMute succeeded.
+        send_mic_state(mic.GetMute())
+    except Exception as e:
+        print(f"Microphone toggle error: {e}")
 
 # --- Основной цикл ---
 def main():
@@ -186,7 +214,7 @@ def main():
 
     print(f"Подключаюсь к {port}...")
     try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        ser = serial.Serial(port, BAUD_RATE, timeout=MIC_SYNC_INTERVAL)
         time.sleep(2)
         ser.reset_input_buffer()
     except serial.SerialException as e:
@@ -199,7 +227,8 @@ def main():
     send_to_display(current_volume)
     send_mute_state(speaker.GetMute())
 
-    mic = get_mic_interface()
+    sync_mic_from_system()
+    next_mic_sync = time.monotonic() + MIC_SYNC_INTERVAL
     watcher = threading.Thread(target=volume_watcher, args=(speaker,), daemon=True)
     watcher.start()
     hb = threading.Thread(target=heartbeat, daemon=True)
@@ -209,6 +238,10 @@ def main():
 
     try:
         while True:
+            # Keep COM access on the main thread, independent of encoder activity.
+            if time.monotonic() >= next_mic_sync:
+                sync_mic_from_system()
+                next_mic_sync = time.monotonic() + MIC_SYNC_INTERVAL
             line = ser.readline().decode("utf-8", errors="ignore").strip()
             if not line:
                 continue
@@ -228,7 +261,7 @@ def main():
             elif line == "PLAY_PAUSE":
                 keyboard.send("play/pause media")
             elif line == "MIC_MUTE":
-                toggle_mic_mute(mic)
+                toggle_mic_mute()
 
     except KeyboardInterrupt:
         print("\nВыход.")

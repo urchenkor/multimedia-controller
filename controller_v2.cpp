@@ -210,6 +210,16 @@ void handleIncoming(String cmd) {
     }
   }
 
+  // Windows is the source of truth for both the OLED and microphone LED.
+  else if (cmd == "DISP:MIC:ON" || cmd == "DISP:MIC:OFF") {
+    bool newMicOn = cmd == "DISP:MIC:ON";
+    if (newMicOn != micOn) {
+      micOn = newMicOn;
+      digitalWrite(ledPin, micOn ? HIGH : LOW);
+      if (!sleepMode) drawScreen();
+    }
+  }
+
 // Обработка PING — обновляет таймер связи
   else if (cmd == "PING") {
     lastPingTime = millis();
@@ -318,11 +328,7 @@ void loop() {
       if (switchReading[i] != switchState[i]) {
         switchState[i] = switchReading[i];
         if (switchState[i] == LOW) {
-          if (switchPins[i] == btnMic) {
-            micOn = !micOn;
-            digitalWrite(ledPin, micOn ? HIGH : LOW);
-            drawScreen();   // обновляем экран сразу
-          }
+          // Wait for Windows confirmation before changing the microphone indicator.
           Serial.println(switchCmds[i]);
         }
       }
