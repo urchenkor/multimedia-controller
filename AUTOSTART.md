@@ -38,8 +38,9 @@ updated without first deleting the previous registration.
 4. Sleep and wake the PC; verify the controller works again and only one scheduled
    instance is running.
 
-The controller must be connected and detectable when the bridge starts. Automatic
-retry for a controller connected later is not part of this feature.
+The bridge retries detection every two seconds if the controller is connected
+later, and reconnects after serial errors. For boards with an unrecognized USB
+description, a manual launch can specify `python controller_v2.py --port COM3`.
 
 To remove automatic startup and wake recovery:
 

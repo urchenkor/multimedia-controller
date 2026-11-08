@@ -1,12 +1,10 @@
 Windows automatic startup: see [AUTOSTART.md](AUTOSTART.md).
 
-readme = """# Media Controller
+# Media Controller
 
 **Медиа-контроллер на Arduino Nano + OLED + энкодер + механические свитчи.**
 Управляет громкостью, mute звука, mute микрофона, переключением треков и паузой.
 Отображает состояние на OLED-дисплее. Автоматически восстанавливается после выхода ПК из сна.
-
-![photo](docs/photo.jpg)
 
 ---
 
@@ -21,8 +19,6 @@ readme = """# Media Controller
 - [Структура проекта](#-структура-проекта)
 - [Протокол Serial](#-протокол-serial)
 - [Устранение неполадок](#-устранение-неполадок)
-- [Дальнейшее развитие](#-дальнейшее-развитие)
-- [Заметки по разработке](#-заметки-по-разработке)
 
 ---
 
@@ -97,7 +93,7 @@ readme = """# Media Controller
 ### Arduino
 
 - **Библиотеки:** `Adafruit_SSD1306`, `Adafruit_GFX`, `Wire`
-- **Файл:** `controller_v2.ino`
+- **Исходник:** `controller_v2.cpp` (скопируйте в Arduino-скетч `controller_v2/controller_v2.ino`)
 - **Скорость Serial:** 9600 baud
 
 ### Python (Windows)
@@ -126,7 +122,7 @@ readme = """# Media Controller
 3. Подключите Nano по USB.
 4. **Tools → Board** → `Arduino Nano`.
 5. **Tools → Processor** → `ATmega328P` или `ATmega328P (Old Bootloader)`.
-6. Откройте `controller_v2.ino`, залейте.
+6. Создайте скетч `controller_v2`, скопируйте в него содержимое `controller_v2.cpp` и загрузите на плату.
 
 ### 2. Установка Python-скрипта
 
@@ -140,4 +136,62 @@ readme = """# Media Controller
 **Вручную:**
 
 ```cmd
-pip install pyserial pycaw comtypes keyboard
+python -m pip install -r requirements.txt
+python install_autostart.py
+```
+
+## Использование
+
+Установите **обе** обновлённые части: прошивку платы и `controller_v2.py`.
+Запустите `setup.bat` от имени администратора под своей обычной учётной записью.
+После входа в Windows контроллер запускается автоматически; после сна —
+перезапускается. Подробности: [AUTOSTART.md](AUTOSTART.md).
+
+Для запуска с диагностикой в консоли:
+
+```cmd
+python controller_v2.py
+```
+
+Если описание USB-устройства не распознаётся автоматически, укажите порт:
+
+```cmd
+python controller_v2.py --port COM3
+```
+
+Скрипт повторяет поиск и подключение каждые две секунды, если плата ещё не
+подключена или связь оборвалась. Другие COM-порты автоматически не выбираются.
+Громкость и состояния mute считываются из Windows каждые 0,5 секунды. Все
+операции с аудио и Serial выполняются в одном потоке.
+
+## Структура проекта
+
+- `controller_v2.cpp` — актуальная прошивка с OLED.
+- `controller_v2.py` — актуальный Windows-мост.
+- `setup.bat`, `install_autostart.py` — установка зависимостей и задачи Windows.
+- `requirements.txt` — зависимости Windows-моста.
+- `tests/` — тесты без платы и Windows API.
+- `controller.cpp`, `controller.py` — предыдущая версия без OLED, сохранена для справки.
+
+## Протокол Serial
+
+9600 baud, команды разделяются переводом строки.
+
+| Направление | Команды |
+| --- | --- |
+| Плата → ПК | `VOL_UP`, `VOL_DOWN`, `SPEAKER_MUTE`, `MIC_MUTE` |
+| Плата → ПК | `TRACK_NEXT`, `TRACK_PREV`, `PLAY_PAUSE`, `READY` |
+| ПК → плата | `DISP:VOL:0` … `DISP:VOL:100` |
+| ПК → плата | `DISP:MUTE:ON` / `DISP:MUTE:OFF` (mute динамиков) |
+| ПК → плата | `DISP:MIC:ON` / `DISP:MIC:OFF` (микрофон включён / выключен) |
+| ПК → плата | `PING` каждую секунду |
+
+## Устранение неполадок
+
+- Закройте Serial Monitor Arduino IDE и лишние копии Python-моста: порт может
+  использоваться только одним процессом.
+- Проверьте задачу `MediaControllerWake` в Планировщике Windows. Она запускается
+  после входа пользователя, а не до входа в систему.
+- Для проверки микрофона после сна см. [MICROPHONE_SYNC.md](MICROPHONE_SYNC.md).
+- Автоматические проверки: `python -m unittest discover -s tests -v`.
+  Работа с физической платой и реальный цикл сна Windows проверяются отдельно.

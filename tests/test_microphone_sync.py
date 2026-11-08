@@ -11,7 +11,7 @@ dependencies = {name: Mock() for name in (
     "serial", "serial.tools", "serial.tools.list_ports", "pycaw", "pycaw.pycaw",
     "comtypes", "keyboard",
 )}
-dependencies["serial"].SerialException = OSError
+dependencies["serial"].SerialException = type("SerialException", (OSError,), {})
 spec = importlib.util.spec_from_file_location(
     "controller_v2", Path(__file__).resolve().parents[1] / "controller_v2.py"
 )
@@ -73,8 +73,9 @@ class MicrophoneSyncTests(unittest.TestCase):
         self.serial.write.assert_not_called()
 
     def test_serial_failure_retries_unchanged_state(self):
-        self.serial.write.side_effect = [OSError("USB unavailable"), None]
-        controller.sync_mic_from_system()
+        self.serial.write.side_effect = [controller.serial.SerialException("USB unavailable"), None]
+        with self.assertRaises(controller.serial.SerialException):
+            controller.sync_mic_from_system()
         controller.sync_mic_from_system()
         self.assertEqual(self.serial.write.call_args_list,
                          [call(b"DISP:MIC:OFF\n")] * 2)
@@ -95,23 +96,19 @@ class MicrophoneSyncTests(unittest.TestCase):
         controller.toggle_mic_mute()
         self.serial.write.assert_not_called()
 
-    def test_main_syncs_at_startup_and_during_idle_and_encoder_input(self):
+    def test_loop_syncs_at_startup_and_during_idle_and_encoder_input(self):
         self.serial.readline.side_effect = [b"", b"VOL_UP\n", KeyboardInterrupt]
         speaker = Mock()
         speaker.GetMasterVolumeLevelScalar.return_value = 0.5
-        with patch.object(controller, "find_arduino", return_value="COM3"), \
-             patch.object(controller.serial, "Serial", return_value=self.serial), \
-             patch.object(controller, "get_speaker_interface", return_value=speaker), \
-             patch.object(controller.threading, "Thread"), \
-             patch.object(controller.time, "sleep"), \
-             patch.object(controller.time, "monotonic", side_effect=[0, 0, 1, 1, 2, 2]), \
+        with patch.object(controller, "get_speaker_interface", return_value=speaker), \
+             patch.object(controller.time, "monotonic", side_effect=[0, 1, 2]), \
              patch.object(controller, "change_volume_adaptive") as change_volume:
-            controller.main()
+            with self.assertRaises(KeyboardInterrupt):
+                controller.run_connected()
         mic_messages = [c for c in self.serial.write.call_args_list
                         if c.args[0].startswith(b"DISP:MIC:")]
         self.assertEqual(mic_messages, [call(b"DISP:MIC:OFF\n")] * 3)
         change_volume.assert_called_once_with(speaker, 1)
-        self.serial.close.assert_called_once()
 
 
 if __name__ == "__main__":

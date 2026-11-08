@@ -24,7 +24,7 @@ echo Found Python: !PYTHON_EXE!
 echo.
 echo [2/3] Installing dependencies...
 
-"!PYTHON_EXE!" -m pip install pyserial pycaw comtypes keyboard
+"!PYTHON_EXE!" -m pip install -r "%~dp0requirements.txt"
 if !errorlevel! neq 0 (
     echo.
     echo [ERROR] Failed to install libraries.

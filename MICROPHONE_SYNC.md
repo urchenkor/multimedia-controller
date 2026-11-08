@@ -18,7 +18,8 @@ endpoint each time so it does not retain a stale microphone interface across
 sleep or default-device changes. Reads and toggles run on the main thread.
 Failed microphone operations are logged and periodic synchronization retries.
 Unchanged state is resent too, allowing a reset board to recover without a change
-in Windows mute state. All serial writers share a lock to keep messages intact.
+in Windows mute state. All serial writes and audio operations run on the main thread to keep messages intact
+and avoid sharing Windows COM interfaces between threads.
 
 New host-to-board messages:
 
@@ -49,9 +50,9 @@ application's independent mute control.
 6. Press the microphone button and verify Windows, OLED and LED agree. Repeat
    while turning the volume encoder.
 
-Synchronization requires a functioning serial connection. This change does not
-add USB port reconnection if Windows removes the port; the existing wake task
-and serial connection behavior are unchanged.
+The bridge retries device detection and reconnects after serial errors. It also
+reacquires the speaker endpoint and resends volume and speaker mute state. The
+scheduled wake task restarts the bridge after Windows resumes.
 
 ## Automated checks
 

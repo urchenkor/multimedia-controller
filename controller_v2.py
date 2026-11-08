@@ -5,7 +5,7 @@ from comtypes import CLSCTX_ALL
 from ctypes import cast, POINTER
 import keyboard
 import time
-import threading
+import argparse
 
 # --- Настройки ---
 BAUD_RATE = 9600
@@ -23,57 +23,27 @@ SPEED_TABLE = [
 
 # --- Глобальные переменные ---
 ser = None
-serial_write_lock = threading.Lock()
 current_volume = 50          # 0..100 (совпадает с Windows)
 last_click_time = 0.0
-last_encoder_change = 0.0
 
 
-# --- Heartbeat ---
-def heartbeat():
-    """Раз в секунду шлёт PING на Arduino, чтобы она знала, что ПК жив."""
-    global ser
-    while True:
-        if ser is not None and ser.is_open:
-            try:
-                with serial_write_lock:
-                    ser.write(b"PING\n")
-            except serial.SerialException:
-                pass
-        time.sleep(1)
+# All serial and Windows audio access stays on the main thread.
+def send_command(message):
+    if ser is not None and ser.is_open:
+        ser.write((message + "\n").encode("ascii"))
 
-# --- Отправка на дисплей ---
+
 def send_to_display(volume_percent):
-    global ser
-    if ser is not None and ser.is_open:
-        try:
-            msg = f"DISP:VOL:{volume_percent}\n"
-            with serial_write_lock:
-                ser.write(msg.encode())
-            print(f"→ {msg.strip()}")
-        except serial.SerialException as e:
-            print(f"Ошибка отправки: {e}")
+    send_command(f"DISP:VOL:{volume_percent}")
 
-# +++ MUTE +++
+
 def send_mute_state(muted):
-    global ser
-    if ser is not None and ser.is_open:
-        try:
-            state = "ON" if muted else "OFF"
-            msg = f"DISP:MUTE:{state}\n"
-            with serial_write_lock:
-                ser.write(msg.encode())
-            print(f"→ {msg.strip()}")
-        except serial.SerialException as e:
-            print(f"Ошибка отправки: {e}")
+    send_command("DISP:MUTE:" + ("ON" if muted else "OFF"))
 
-# --- Синхронизация микрофона ---
+
 def send_mic_state(muted):
     """DISP:MIC describes whether the microphone is ON, not whether it is muted."""
-    if ser is not None and ser.is_open:
-        state = "OFF" if muted else "ON"
-        with serial_write_lock:
-            ser.write(f"DISP:MIC:{state}\n".encode())
+    send_command("DISP:MIC:" + ("OFF" if muted else "ON"))
 
 
 def sync_mic_from_system():
@@ -82,41 +52,24 @@ def sync_mic_from_system():
         mic = get_mic_interface()
         # Send even unchanged state: the board may have reset while Windows slept.
         send_mic_state(mic.GetMute())
+    except serial.SerialException:
+        raise
     except Exception as e:
         print(f"Microphone sync error: {e}")
 
 
-# --- Опрос громкости и mute ---
-def volume_watcher(volume):
-    """Раз в 0.5 сек проверяет системную громкость и обновляет дисплей."""
-    global current_volume, last_encoder_change
-    last_sent_vol = -1
-    last_sent_mute = None
+def sync_speaker_from_system():
+    """Reacquire the endpoint and resend state, including after a board reset."""
+    try:
+        speaker = get_speaker_interface()
+        sync_volume_from_system(speaker)
+        send_to_display(current_volume)
+        send_mute_state(speaker.GetMute())
+    except serial.SerialException:
+        raise
+    except Exception as e:
+        print(f"Speaker sync error: {e}")
 
-    while True:
-        try:
-            if time.time() - last_encoder_change < 1.0:
-                time.sleep(0.1)
-                continue
-
-            real_linear = volume.GetMasterVolumeLevelScalar()
-            display_percent = int(round(real_linear * 100))
-
-            if display_percent != last_sent_vol:
-                last_sent_vol = display_percent
-                current_volume = display_percent
-                send_to_display(display_percent)
-
-            # +++ MUTE: следим за состоянием mute +++
-            muted = volume.GetMute()
-            if muted != last_sent_mute:
-                last_sent_mute = muted
-                send_mute_state(muted)
-
-        except Exception as e:
-            print(f"Watcher error: {e}")
-
-        time.sleep(0.5)
 
 # --- Поиск Arduino ---
 def find_arduino():
@@ -124,8 +77,6 @@ def find_arduino():
     for port in ports:
         if any(k in port.description for k in ["CH340", "Arduino", "USB Serial", "USB-SERIAL"]):
             return port.device
-    if ports:
-        return ports[0].device
     return None
 
 # --- Интерфейс динамиков ---
@@ -144,7 +95,6 @@ def sync_volume_from_system(volume):
     global current_volume
     real_linear = volume.GetMasterVolumeLevelScalar()
     current_volume = int(round(real_linear * 100))
-    print(f"Текущая громкость Windows: {current_volume}%")
 
 
 # --- Адаптивный шаг ---
@@ -156,21 +106,15 @@ def get_step_multiplier(interval):
 
 def change_volume_adaptive(volume, direction):
     """direction: +1 (вверх) или -1 (вниз). Шаг зависит от скорости вращения."""
-    global current_volume, last_click_time, last_encoder_change
+    global current_volume, last_click_time
 
-    now = time.time()
+    now = time.monotonic()
     interval = now - last_click_time
 
-    if interval > ACCEL_TIMEOUT:
-        # После паузы — синхронизация с реальной громкостью Windows
-        real_linear = volume.GetMasterVolumeLevelScalar()
-        current_volume = int(round(real_linear * 100))
-        multiplier = 1
-    else:
-        multiplier = get_step_multiplier(interval)
-
+    # Read the selected device even during a fast turn or after a device switch.
+    current_volume = int(round(volume.GetMasterVolumeLevelScalar() * 100))
+    multiplier = 1 if last_click_time == 0 or interval > ACCEL_TIMEOUT else get_step_multiplier(interval)
     last_click_time = now
-    last_encoder_change = now
 
     # Меняем громкость в процентах, напрямую
     current_volume = max(0, min(100, current_volume + direction * multiplier))
@@ -188,7 +132,7 @@ def change_volume_adaptive(volume, direction):
 def toggle_speaker_mute(volume):
     muted = volume.GetMute()
     volume.SetMute(not muted, None)
-    new_state = not muted
+    new_state = volume.GetMute()
     print("🔊 Звук ВЫКЛ" if new_state else "🔊 Звук ВКЛ")
     send_mute_state(new_state)
 
@@ -200,75 +144,82 @@ def toggle_mic_mute():
         mic.SetMute(not mic.GetMute(), None)
         # Report the actual result, rather than assuming SetMute succeeded.
         send_mic_state(mic.GetMute())
+    except serial.SerialException:
+        raise
     except Exception as e:
         print(f"Microphone toggle error: {e}")
 
-# --- Основной цикл ---
-def main():
-    global ser, current_volume
-
-    port = find_arduino()
-    if not port:
-        print("Arduino не найдена. Проверь подключение.")
-        return
-
-    print(f"Подключаюсь к {port}...")
+def handle_command(line):
     try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=MIC_SYNC_INTERVAL)
-        time.sleep(2)
-        ser.reset_input_buffer()
-    except serial.SerialException as e:
-        print(f"Ошибка открытия порта: {e}")
-        return
+        if line == "VOL_UP":
+            change_volume_adaptive(get_speaker_interface(), +1)
+        elif line == "VOL_DOWN":
+            change_volume_adaptive(get_speaker_interface(), -1)
+        elif line == "SPEAKER_MUTE":
+            toggle_speaker_mute(get_speaker_interface())
+        elif line == "TRACK_NEXT":
+            keyboard.send("next track")
+        elif line == "TRACK_PREV":
+            keyboard.send("previous track")
+        elif line == "PLAY_PAUSE":
+            keyboard.send("play/pause media")
+        elif line == "MIC_MUTE":
+            toggle_mic_mute()
+    except serial.SerialException:
+        raise
+    except Exception as e:
+        # Audio endpoints can disappear temporarily while Windows resumes.
+        print(f"Command error: {e}")
 
-    speaker = get_speaker_interface()
-    sync_volume_from_system(speaker)
 
-    send_to_display(current_volume)
-    send_mute_state(speaker.GetMute())
+def run_connected():
+    next_sync = 0.0
+    next_ping = 0.0
+    while True:
+        now = time.monotonic()
+        if now >= next_ping:
+            send_command("PING")
+            next_ping = now + 1.0
+        if now >= next_sync:
+            sync_speaker_from_system()
+            sync_mic_from_system()
+            next_sync = now + MIC_SYNC_INTERVAL
+        line = ser.readline().decode("utf-8", errors="ignore").strip()
+        if line:
+            handle_command(line)
 
-    sync_mic_from_system()
-    next_mic_sync = time.monotonic() + MIC_SYNC_INTERVAL
-    watcher = threading.Thread(target=volume_watcher, args=(speaker,), daemon=True)
-    watcher.start()
-    hb = threading.Thread(target=heartbeat, daemon=True)
-    hb.start()
 
-    print("Готово. Управляй!")
-
+def main(port=None):
+    global ser, last_click_time
     try:
         while True:
-            # Keep COM access on the main thread, independent of encoder activity.
-            if time.monotonic() >= next_mic_sync:
-                sync_mic_from_system()
-                next_mic_sync = time.monotonic() + MIC_SYNC_INTERVAL
-            line = ser.readline().decode("utf-8", errors="ignore").strip()
-            if not line:
-                continue
-
-            print(f"← {line}")
-
-            if line == "VOL_UP":
-                change_volume_adaptive(speaker, +1)
-            elif line == "VOL_DOWN":
-                change_volume_adaptive(speaker, -1)
-            elif line == "SPEAKER_MUTE":
-                toggle_speaker_mute(speaker)
-            elif line == "TRACK_NEXT":
-                keyboard.send("next track")
-            elif line == "TRACK_PREV":
-                keyboard.send("previous track")
-            elif line == "PLAY_PAUSE":
-                keyboard.send("play/pause media")
-            elif line == "MIC_MUTE":
-                toggle_mic_mute()
-
+            try:
+                device = port or find_arduino()
+                if device:
+                    print(f"Connecting to {device}...")
+                    ser = serial.Serial(device, BAUD_RATE, timeout=MIC_SYNC_INTERVAL,
+                                        write_timeout=1)
+                    time.sleep(2)  # Opening serial resets the Nano.
+                    ser.reset_input_buffer()
+                    last_click_time = 0.0
+                    run_connected()
+                else:
+                    print("Controller not found; retrying in 2 seconds.")
+            except (serial.SerialException, OSError) as e:
+                print(f"Serial connection lost: {e}; retrying in 2 seconds.")
+            finally:
+                if ser is not None:
+                    try:
+                        ser.close()
+                    except (serial.SerialException, OSError):
+                        pass
+                    ser = None
+            time.sleep(2)
     except KeyboardInterrupt:
-        print("\nВыход.")
-    finally:
-        if ser and ser.is_open:
-            ser.close()
+        print("\nExit.")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Windows bridge for the media controller")
+    parser.add_argument("--port", help="Explicit COM port for a board not detected automatically")
+    main(parser.parse_args().port)
