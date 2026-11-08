@@ -1,3 +1,5 @@
+Windows automatic startup: see [AUTOSTART.md](AUTOSTART.md).
+
 readme = """# Media Controller
 
 **Медиа-контроллер на Arduino Nano + OLED + энкодер + механические свитчи.**
